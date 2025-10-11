@@ -29,11 +29,10 @@ rm(install_if_missing, packages)
 
 # Setting file paths ----
 
-input_data_file_path <- "inputs/h1b_data_2024.xlsx"
+input_data_file_path <- "inputs/h1b_data_2024.xlsx" # Download the data here: https://www.uscis.gov/tools/reports-and-studies/h-1b-employer-data-hub 
 
-metro_shp_file_path <- "C:/Users/ianwe/Downloads/shapefiles/2024/CBSAs/cb_2024_us_cbsa_500K.shp" # Input the file path for the shape file that you would like to read in. 
-
-zip_metro_crosswalk_file_path <- "C:/Users/ianwe/Downloads/ZIP_CBSA_062025.xlsx"
+metro_shp_file_path <- "C:/Users/ianwe/Downloads/shapefiles/2024/CBSAs/cb_2024_us_cbsa_500K.shp" # Download this shape file here: https://www2.census.gov/geo/tiger/GENZ2024/shp/cb_2024_us_cbsa_500k.zip
+zip_metro_crosswalk_file_path <- "C:/Users/ianwe/Downloads/ZIP_CBSA_062025.xlsx" # Download the zip-to-metro crosswalk here: https://www.huduser.gov/apps/public/uspscrosswalk/home
 
 output_file_path_for_tabular_data <- "outputs/h1b_approvals_and_denials_by_metro_2024.xlsx"
 
@@ -50,6 +49,14 @@ metro_shp_info <- metro_shp %>%
   st_drop_geometry() %>%
   select(-c(NAMELSAD, GEOIDFQ, CSAFP, CBSAFP, LSAD, ALAND, AWATER))
 
+# Reading in crosswalk ----
+
+zip_metro_crosswalk <- read.xlsx(zip_metro_crosswalk_file_path)
+
+zip_metro_crosswalk <- zip_metro_crosswalk %>%
+  select(ZIP, CBSA, BUS_RATIO) %>%
+  janitor::clean_names()
+
 # Reading in labor force data ----
 
 census_api_key <- '6dd2c4143fc5f308c1120021fb663c15409f3757' # Provide the Census API Key, if others are running this you will need to get a Census API key here: https://api.census.gov/data/key_signup.html
@@ -60,13 +67,12 @@ geo_level_for_data_pull <- "cbsa" # Define the geography for the ACS data downlo
 # See https://walker-data.com/tidycensus/articles/basic-usage.html#geography-in-tidycensus for a comprehensive list of geography options.
 read_in_geometry <- FALSE # Change this to TRUE to pull in spatial data along with the data download 
 show_api_call = TRUE # Show the call made to the Census API in the console, this will help if an error is thrown
-# Load the variables for the year / dataset selected above
 
+# Load the variables for the year / dataset selected above
 # acs_variables <- load_variables(year = 2024, dataset = acs_data_type)
 
-# Read in the preferred variable spreadsheet (create your own within this file: R:/ADHOC-JBREC/Ian-K/API Template Scripts/ACS/Summary Tables/acs_variables_2023_acs1.xlsx)
-variables <- read.xlsx("C:/Users/ianwe/Downloads/github/acs/acs-variables/acs_variables_2024_acs1.xlsx", 
-                       sheet = 'Labor Force')
+# Read in the preferred variable spreadsheet 
+variables <- read.xlsx("inputs/acs_variables_2024_acs1.xlsx", sheet = 'Labor Force')
 
 # Select 'name' and 'amended_label' (and rename 'name' to code')
 variables <- variables %>%
@@ -96,13 +102,16 @@ labor_force_data <- labor_force_data %>%
   pivot_wider(names_from = 'variable', values_from = 'estimate', id_cols = c('GEOID', 'NAME'))
 
 labor_force_data <- labor_force_data %>%
+  # Drop PR metros
   filter(!str_detect(NAME, pattern = ', PR Metro Area')) %>%
   mutate(clv_25_64 = civ_labor_force_25_64_less_than_hs+civ_labor_force_25_64_hs+civ_labor_force_25_64_some_college+civ_labor_force_25_64_bachelors) %>%
   select(GEOID, NAME, pop, clv_25_64)
 
-# Reading in data ----
+# Reading in H1B data ----
 
 data <- read.xlsx(input_data_file_path)
+
+# Data analysis ----
 
 data <- data %>%
   select(`Employer.(Petitioner).Name`, Petitioner.Zip.Code, Petitioner.City, Petitioner.State, Tax.ID, `Industry.(NAICS).Code`, 
@@ -119,22 +128,12 @@ data_condensed <- data %>%
 
 data_condensed <- data_condensed %>%
   mutate(zip = case_when(
-           is.na(zip) ~ '-99',
-           T ~ zip),
-         state = case_when(
-           is.na(state) ~ '-99',
-           T ~ state)
-         )
-
-# Reading in crosswalk ----
-
-zip_metro_crosswalk <- read.xlsx(zip_metro_crosswalk_file_path)
-
-zip_metro_crosswalk <- zip_metro_crosswalk %>%
-  select(ZIP, CBSA, BUS_RATIO) %>%
-  janitor::clean_names()
-
-# Data analysis ----
+    is.na(zip) ~ '-99',
+    T ~ zip),
+    state = case_when(
+      is.na(state) ~ '-99',
+      T ~ state)
+  )
 
 data_condensed <- data_condensed %>%
   filter(zip != '-99') %>%
@@ -159,7 +158,9 @@ data_cbsa <- labor_force_data %>%
   left_join(data_cbsa, by = c('GEOID' = 'cbsa')) 
 
 data_cbsa <- data_cbsa %>%
-  mutate(across(new_employment_approval:amended_denial, ~if_else(is.na(.), 0, .)))
+  mutate(across(new_employment_approval:amended_denial, ~if_else(is.na(.), 0, .))) %>%
+  mutate(NAME = str_remove(NAME, pattern = ' Metro Area'),
+         NAME = str_remove(NAME, pattern = ' Micro Area'))
 
 # Output tabular data ----
 
